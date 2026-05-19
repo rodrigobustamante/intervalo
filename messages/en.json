@@ -1,0 +1,14 @@
+{
+  "enter": "Enter",
+  "tagline": "Seven lines. Seven voices.",
+  "activeTrains": "{count} active trains",
+  "notePerMin": "{count} notes/min",
+  "languageToggle": "Cambiar a español",
+  "colophon": {
+    "title": "Intervalo",
+    "description": "Each train plays a note as it approaches a station.",
+    "inspiredBy": "Inspired by",
+    "dataSource": "Data: Metro de Santiago / DTPM",
+    "mapCredit": "Map: mapcn + MapLibre GL + CARTO"
+  }
+}
