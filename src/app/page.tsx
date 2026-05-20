@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { type CityId } from "@/lib/cities";
 import dynamic from "next/dynamic";
 import { initAudio } from "@/lib/audio";
 
@@ -9,14 +10,14 @@ const MetroMap = dynamic(() => import("@/components/MetroMap"), { ssr: false });
 
 export default function Home() {
   const { t, theme } = useI18n();
-  const [entered, setEntered] = useState(false);
+  const [city, setCity] = useState<CityId | null>(null);
 
-  const handleEnter = () => {
+  const handleEnter = (selectedCity: CityId) => {
     initAudio();
-    setEntered(true);
+    setCity(selectedCity);
   };
 
-  if (entered) return <MetroMap />;
+  if (city) return <MetroMap city={city} />;
 
   const isDark = theme === "dark";
   const bg = isDark ? "bg-[#0a0a0a]" : "bg-[#f5f0e8]";
@@ -35,13 +36,21 @@ export default function Home() {
         <p className={`text-sm font-mono tracking-wider ${taglineColor}`}>
           {t("tagline")}
         </p>
-        <button
-          autoFocus
-          onClick={handleEnter}
-          className={`mt-8 px-8 py-3 text-sm font-mono border focus-visible:ring-2 outline-none transition-all tracking-widest uppercase ${btnClass}`}
-        >
-          {t("enter")}
-        </button>
+        <div className="flex gap-4 justify-center mt-8">
+          <button
+            autoFocus
+            onClick={() => handleEnter("santiago")}
+            className={`px-6 py-3 text-sm font-mono border focus-visible:ring-2 outline-none transition-all tracking-widest uppercase ${btnClass}`}
+          >
+            {t("cities.santiago")}
+          </button>
+          <button
+            onClick={() => handleEnter("madrid")}
+            className={`px-6 py-3 text-sm font-mono border focus-visible:ring-2 outline-none transition-all tracking-widest uppercase ${btnClass}`}
+          >
+            {t("cities.madrid")}
+          </button>
+        </div>
       </div>
     </main>
   );

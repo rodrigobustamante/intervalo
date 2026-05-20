@@ -1,14 +1,21 @@
 {
   "enter": "Enter",
-  "tagline": "Seven lines. Seven voices.",
+  "tagline": "The metro as instrument.",
   "activeTrains": "{count} active trains",
   "notePerMin": "{count} notes/min",
   "languageToggle": "Cambiar a español",
+  "cities": {
+    "santiago": "Santiago",
+    "madrid": "Madrid"
+  },
   "colophon": {
     "title": "Intervalo",
     "description": "Each train plays a note as it approaches a station.",
     "inspiredBy": "Inspired by",
-    "dataSource": "Data: Metro de Santiago / DTPM",
+    "dataSource": {
+      "santiago": "Data: Metro de Santiago / DTPM",
+      "madrid": "Data: Metro de Madrid / CRTM"
+    },
     "mapCredit": "Map: mapcn + MapLibre GL + CARTO"
   }
 }

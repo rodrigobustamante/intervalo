@@ -17,10 +17,30 @@ export interface Stop {
 }
 
 export interface StopTime {
-  stopId: string;
   arrival: number;
   departure: number;
   coords: [number, number];
+  shapeIdx?: number;
+}
+
+// Compact schedule format used by Madrid (templates + offsets instead of expanded trips)
+export interface CompactStopTime {
+  arrival: number;
+  departure: number;
+  coords: [number, number];
+  shapeIdx?: number;
+}
+
+export interface TripTemplate {
+  id: string;
+  lineId: string;
+  serviceId: string;
+  stopTimes: CompactStopTime[];
+}
+
+export interface CompactSchedule {
+  templates: TripTemplate[];
+  index: [number, number][]; // [templateIndex, tripStart]
 }
 
 export interface Trip {

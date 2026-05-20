@@ -3,19 +3,41 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Map, useMap } from "@/components/ui/map";
 import type { MapViewport } from "@/components/ui/map";
-import type { Line, Stop, Trip } from "@/lib/gtfs-types";
+import type { Line, Stop, Trip, CompactSchedule } from "@/lib/gtfs-types";
 import {
-  santiagoNow,
+  cityNow,
   activeServiceIds,
   interpolatePosition,
 } from "@/lib/interpolator";
 import { setVolumeFromZoom } from "@/lib/audio";
 import { useI18n, type Theme } from "@/lib/i18n";
+import { CITIES, type CityId } from "@/lib/cities";
 import TrainLayer from "./TrainLayer";
 import StationPingLayer from "./StationPingLayer";
 
-const SANTIAGO_CENTER: [number, number] = [-70.6506, -33.4372];
-const INITIAL_ZOOM = 11;
+// Reconstructs expanded Trip[] from compact template+offset format (Madrid)
+// or passes through directly if already an array (Santiago)
+function expandSchedule(data: Trip[] | CompactSchedule): Trip[] {
+  if (Array.isArray(data)) return data;
+  const { templates, index } = data;
+  return index.map(([ti, tripStart]) => {
+    const tmpl = templates[ti];
+    return {
+      tripId: `${tmpl.id}_${tripStart}`,
+      lineId: tmpl.lineId,
+      serviceId: tmpl.serviceId,
+      stopTimes: tmpl.stopTimes.map((st) => {
+        const entry: Trip["stopTimes"][number] = {
+          arrival: st.arrival + tripStart,
+          departure: st.departure + tripStart,
+          coords: st.coords,
+        };
+        if (st.shapeIdx !== undefined) entry.shapeIdx = st.shapeIdx;
+        return entry;
+      }),
+    };
+  });
+}
 
 // ── Static lines layer ──────────────────────────────────────────────────────
 
@@ -79,9 +101,10 @@ interface StatsProps {
   notesPerMin: number;
   lastAnnouncement: string;
   theme: Theme;
+  city: CityId;
 }
 
-function StatsOverlay({ activeCount, notesPerMin, lastAnnouncement, theme }: StatsProps) {
+function StatsOverlay({ activeCount, notesPerMin, lastAnnouncement, theme, city }: StatsProps) {
   const { t } = useI18n();
   const activeLabel = t("activeTrains", { count: activeCount });
   const notesLabel = t("notePerMin", { count: notesPerMin });
@@ -96,7 +119,7 @@ function StatsOverlay({ activeCount, notesPerMin, lastAnnouncement, theme }: Sta
       >
         <span aria-label={activeLabel}>{activeLabel}</span>
         <span aria-label={notesLabel}>{notesLabel}</span>
-        <span className={mutedColor}>Santiago</span>
+        <span className={mutedColor}>{t(`cities.${city}`)}</span>
       </section>
 
       <div aria-live="polite" aria-atomic="false" className="sr-only">
@@ -108,7 +131,7 @@ function StatsOverlay({ activeCount, notesPerMin, lastAnnouncement, theme }: Sta
 
 // ── Colophon ────────────────────────────────────────────────────────────────
 
-function Colophon({ open, onClose, theme }: { open: boolean; onClose: () => void; theme: Theme }) {
+function Colophon({ open, onClose, theme, city }: { open: boolean; onClose: () => void; theme: Theme; city: CityId }) {
   const { t } = useI18n();
   if (!open) return null;
 
@@ -140,7 +163,7 @@ function Colophon({ open, onClose, theme }: { open: boolean; onClose: () => void
           <a href="https://www.trainjazz.com/" rel="noopener noreferrer" className={`underline ${linkColor}`} target="_blank">TrainJazz↗</a>{" "}
           (Joshua Wolk)
         </p>
-        <p>{t("colophon.dataSource")}</p>
+        <p>{t(`colophon.dataSource.${city}`)}</p>
         <p>
           {t("colophon.mapCredit").split("mapcn")[0]}
           <a href="https://mapcn.dev" rel="noopener noreferrer" className={`underline ${linkColor}`} target="_blank">mapcn↗</a>
@@ -153,7 +176,9 @@ function Colophon({ open, onClose, theme }: { open: boolean; onClose: () => void
 
 // ── MetroMap ────────────────────────────────────────────────────────────────
 
-export default function MetroMap() {
+export default function MetroMap({ city }: { city: CityId }) {
+  const cityConfig = CITIES[city];
+
   const [lines, setLines] = useState<Line[]>([]);
   const [stops, setStops] = useState<Stop[]>([]);
   const [schedule, setSchedule] = useState<Trip[]>([]);
@@ -176,24 +201,26 @@ export default function MetroMap() {
   const announceCooldownRef = useRef(0);
 
   useEffect(() => {
+    setLoading(true);
+    const { dataPath } = cityConfig;
     Promise.all([
-      fetch("/data/lines.json").then((r) => r.json()),
-      fetch("/data/stops.json").then((r) => r.json()),
-      fetch("/data/schedule.json").then((r) => r.json()),
+      fetch(`${dataPath}/lines.json`).then((r) => r.json()),
+      fetch(`${dataPath}/stops.json`).then((r) => r.json()),
+      fetch(`${dataPath}/schedule.json`).then((r) => r.json()),
     ]).then(([l, s, sc]) => {
       setLines(l);
       setStops(s);
-      setSchedule(sc);
+      setSchedule(expandSchedule(sc));
       setLoading(false);
     });
-  }, []);
+  }, [city]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Update active train count every second
   useEffect(() => {
     if (schedule.length === 0) return;
     const interval = setInterval(() => {
-      const { seconds, dow } = santiagoNow();
-      const valid = activeServiceIds(dow);
+      const { seconds, dow } = cityNow(cityConfig.timezone);
+      const valid = activeServiceIds(dow, cityConfig.serviceByDow);
       const count = schedule.filter(
         (trip) => valid.has(trip.serviceId) && interpolatePosition(trip, seconds) !== null
       ).length;
@@ -204,7 +231,7 @@ export default function MetroMap() {
       setNotesPerMin(notesInWindowRef.current.length);
     }, 1000);
     return () => clearInterval(interval);
-  }, [schedule]);
+  }, [schedule]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleArrival = useCallback((lineId: string, stopName: string) => {
     notesInWindowRef.current.push(performance.now());
@@ -226,8 +253,8 @@ export default function MetroMap() {
       <div role="presentation" aria-hidden="true" className="absolute inset-0">
         <Map
           theme={theme}
-          center={SANTIAGO_CENTER}
-          zoom={INITIAL_ZOOM}
+          center={cityConfig.center}
+          zoom={cityConfig.zoom}
           attributionControl={false}
           loading={loading}
           onViewportChange={handleViewportChange}
@@ -239,6 +266,7 @@ export default function MetroMap() {
             stops={stops}
             schedule={schedule}
             reducedMotion={reducedMotion}
+            city={city}
             onArrival={handleArrival}
           />
         </Map>
@@ -249,6 +277,7 @@ export default function MetroMap() {
         notesPerMin={notesPerMin}
         lastAnnouncement={lastAnnouncement}
         theme={theme}
+        city={city}
       />
 
       <button
@@ -259,7 +288,7 @@ export default function MetroMap() {
         info
       </button>
 
-      <Colophon open={colophonOpen} onClose={() => setColophonOpen(false)} theme={theme} />
+      <Colophon open={colophonOpen} onClose={() => setColophonOpen(false)} theme={theme} city={city} />
     </div>
   );
 }

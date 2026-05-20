@@ -36,5 +36,3 @@ next-env.d.ts
 # gtfs source (large, do not commit)
 scripts/gtfs/*.zip
 
-# madrid data (phase 3 — not part of MVP)
-public/data/madrid/

@@ -1,20 +1,41 @@
 import type { Trip, Stop } from "./gtfs-types";
 
-// GTFS service_ids active per day of week
-const SERVICE_BY_DOW: Record<number, string[]> = {
-  0: ["D", "F"],     // Sunday
-  1: ["L", "LJ"],    // Monday
-  2: ["L", "LJ"],    // Tuesday
-  3: ["L", "LJ"],    // Wednesday
-  4: ["L", "LJ"],    // Thursday
-  5: ["L", "V"],     // Friday
-  6: ["S"],          // Saturday
-};
+// Walk along shape[fromIdx..toIdx] (forward or backward) at fraction t ∈ [0,1]
+function lerpAlongPath(
+  shape: [number, number][],
+  fromIdx: number,
+  toIdx: number,
+  t: number
+): [number, number] {
+  if (fromIdx === toIdx) return shape[fromIdx];
+  const step = fromIdx < toIdx ? 1 : -1;
+  const pts: [number, number][] = [];
+  for (let i = fromIdx; ; i += step) {
+    pts.push(shape[i]);
+    if (i === toIdx) break;
+  }
+  if (pts.length === 1) return pts[0];
+  const dists = [0];
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1];
+    dists.push(dists[i - 1] + Math.sqrt(dx * dx + dy * dy));
+  }
+  const total = dists[dists.length - 1];
+  if (total === 0) return pts[0];
+  const target = t * total;
+  for (let i = 1; i < pts.length; i++) {
+    if (target <= dists[i]) {
+      const st = (target - dists[i - 1]) / (dists[i] - dists[i - 1]);
+      return [pts[i-1][0] + (pts[i][0] - pts[i-1][0]) * st, pts[i-1][1] + (pts[i][1] - pts[i-1][1]) * st];
+    }
+  }
+  return pts[pts.length - 1];
+}
 
-export function santiagoNow(): { seconds: number; dow: number } {
+export function cityNow(timezone: string): { seconds: number; dow: number } {
   const now = new Date();
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Santiago",
+    timeZone: timezone,
     hour: "numeric",
     minute: "numeric",
     second: "numeric",
@@ -25,22 +46,25 @@ export function santiagoNow(): { seconds: number; dow: number } {
   const get = (type: string) => parseInt(parts.find((p) => p.type === type)!.value);
   const seconds = get("hour") * 3600 + get("minute") * 60 + get("second");
 
-  // weekday: 0=Sun, 1=Mon, ..., 6=Sat via JS Date in Santiago timezone
   const localMidnight = new Date(
-    now.toLocaleString("en-US", { timeZone: "America/Santiago" })
+    now.toLocaleString("en-US", { timeZone: timezone })
   );
   const dow = localMidnight.getDay();
 
   return { seconds, dow };
 }
 
-export function activeServiceIds(dow: number): Set<string> {
-  return new Set(SERVICE_BY_DOW[dow] ?? []);
+export function activeServiceIds(
+  dow: number,
+  serviceByDow: Record<number, string[]>
+): Set<string> {
+  return new Set(serviceByDow[dow] ?? []);
 }
 
 export function interpolatePosition(
   trip: Trip,
-  seconds: number
+  seconds: number,
+  lineShapes?: Map<string, [number, number][]>
 ): [number, number] | null {
   const { stopTimes } = trip;
   if (stopTimes.length < 2) return null;
@@ -58,6 +82,12 @@ export function interpolatePosition(
       const duration = b.arrival - a.departure;
       if (duration <= 0) return a.coords;
       const t = Math.max(0, Math.min(1, (seconds - a.departure) / duration));
+
+      const shape = lineShapes?.get(trip.lineId);
+      if (shape && a.shapeIdx !== undefined && b.shapeIdx !== undefined) {
+        return lerpAlongPath(shape, a.shapeIdx, b.shapeIdx, t);
+      }
+
       return [
         a.coords[0] + (b.coords[0] - a.coords[0]) * t,
         a.coords[1] + (b.coords[1] - a.coords[1]) * t,

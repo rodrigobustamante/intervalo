@@ -25,6 +25,16 @@ const LINE_META = {
   L6:  { note: "F5", oscillatorType: "sine",      color: "#8E3A80" },
 };
 
+function nearestShapeIdx(coords, shape) {
+  let bestIdx = 0, bestDist = Infinity;
+  for (let i = 0; i < shape.length; i++) {
+    const dx = coords[0] - shape[i][0], dy = coords[1] - shape[i][1];
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestDist) { bestDist = d2; bestIdx = i; }
+  }
+  return bestIdx;
+}
+
 function parseCsv(buffer) {
   return new Promise((resolve, reject) => {
     parse(buffer, { columns: true, skip_empty_lines: true, trim: true }, (err, records) => {
@@ -50,6 +60,8 @@ function timeToSeconds(hhmmss) {
   return h * 3600 + m * 60 + s;
 }
 
+const r5 = (v) => Math.round(v * 1e5) / 1e5;
+
 async function main() {
   console.log("Reading GTFS ZIP...");
   const zip = new AdmZip(ZIP_PATH);
@@ -66,22 +78,34 @@ async function main() {
   const trips = await parseCsv(read("trips.txt"));
   const metroTrips = trips.filter((t) => metroRouteIds.has(t.route_id));
 
-  // Pick one canonical shape_id per line (first trip, direction_id=0 preferred)
+  // Load shapes; count points per shape_id to pick the most complete geometry
+  const shapes = await parseCsvStream(read("shapes.txt"));
+  const shapePointCount = new Map();
+  for (const pt of shapes) {
+    shapePointCount.set(pt.shape_id, (shapePointCount.get(pt.shape_id) ?? 0) + 1);
+  }
+
+  // One canonical shape per line: among direction_id=0 trips, pick shape with most points
   const canonicalShapeId = {};
   for (const t of metroTrips) {
-    if (!canonicalShapeId[t.route_id] || t.direction_id === "0") {
+    if (t.direction_id !== "0") continue;
+    const existing = canonicalShapeId[t.route_id];
+    if (!existing || (shapePointCount.get(t.shape_id) ?? 0) > (shapePointCount.get(existing) ?? 0)) {
       canonicalShapeId[t.route_id] = t.shape_id;
     }
   }
+  for (const t of metroTrips) {
+    if (!canonicalShapeId[t.route_id]) canonicalShapeId[t.route_id] = t.shape_id;
+  }
 
-  const shapes = await parseCsvStream(read("shapes.txt"));
+  const canonicalSet = new Set(Object.values(canonicalShapeId));
   const shapePoints = {};
   for (const pt of shapes) {
-    if (!Object.values(canonicalShapeId).includes(pt.shape_id)) continue;
+    if (!canonicalSet.has(pt.shape_id)) continue;
     if (!shapePoints[pt.shape_id]) shapePoints[pt.shape_id] = [];
     shapePoints[pt.shape_id].push({
       seq: parseInt(pt.shape_pt_sequence),
-      coords: [parseFloat(pt.shape_pt_lon), parseFloat(pt.shape_pt_lat)],
+      coords: [r5(parseFloat(pt.shape_pt_lon)), r5(parseFloat(pt.shape_pt_lat))],
     });
   }
   for (const id of Object.keys(shapePoints)) {
@@ -127,12 +151,14 @@ async function main() {
         id: canonicalId,
         name: cleanName,
         lineId,
-        coords: [parseFloat(s.stop_lon), parseFloat(s.stop_lat)],
+        coords: [r5(parseFloat(s.stop_lon)), r5(parseFloat(s.stop_lat))],
       });
     }
   }
   const stops = Array.from(stationMap.values());
   console.log(`Metro stops (deduplicated): ${stops.length}`);
+
+  const lineShapeMap = new Map(lines.map((l) => [l.id, l.shape]));
 
   // Build lookup: raw stop_id → canonical station id + coords
   const rawToCanonical = new Map();
@@ -148,7 +174,7 @@ async function main() {
   // Also build raw stop_id → coords directly for schedule
   const rawStopCoords = new Map();
   for (const s of boardingStops) {
-    rawStopCoords.set(s.stop_id, [parseFloat(s.stop_lon), parseFloat(s.stop_lat)]);
+    rawStopCoords.set(s.stop_id, [r5(parseFloat(s.stop_lon)), r5(parseFloat(s.stop_lat))]);
   }
 
   // ── schedule.json: stream stop_times ────────────────────────────────────────
@@ -164,18 +190,33 @@ async function main() {
   const stopTimesData = read("stop_times.txt");
   const stopTimeRecords = await parseCsvStream(stopTimesData);
 
+  const stopShapeIdxCache = new Map();
   for (const st of stopTimeRecords) {
     if (!metroTripIds.has(st.trip_id)) continue;
     if (!tripStopTimes.has(st.trip_id)) tripStopTimes.set(st.trip_id, []);
     const coords = rawStopCoords.get(st.stop_id);
     if (!coords) continue;
-    tripStopTimes.get(st.trip_id).push({
-      stopId: st.stop_id,
+
+    let shapeIdx;
+    if (stopShapeIdxCache.has(st.stop_id)) {
+      shapeIdx = stopShapeIdxCache.get(st.stop_id);
+    } else {
+      const lineId = tripMeta.get(st.trip_id)?.lineId;
+      const shape = lineShapeMap.get(lineId) ?? [];
+      if (shape.length > 0) {
+        shapeIdx = nearestShapeIdx(coords, shape);
+        stopShapeIdxCache.set(st.stop_id, shapeIdx);
+      }
+    }
+
+    const entry = {
       arrival: timeToSeconds(st.arrival_time),
       departure: timeToSeconds(st.departure_time),
       seq: parseInt(st.stop_sequence),
       coords,
-    });
+    };
+    if (shapeIdx !== undefined) entry.shapeIdx = shapeIdx;
+    tripStopTimes.get(st.trip_id).push(entry);
   }
 
   const schedule = [];
@@ -186,12 +227,11 @@ async function main() {
       tripId,
       lineId: meta.lineId,
       serviceId: meta.serviceId,
-      stopTimes: stopTimes.map(({ stopId, arrival, departure, coords }) => ({
-        stopId,
-        arrival,
-        departure,
-        coords,
-      })),
+      stopTimes: stopTimes.map(({ arrival, departure, coords, shapeIdx }) => {
+        const entry = { arrival, departure, coords };
+        if (shapeIdx !== undefined) entry.shapeIdx = shapeIdx;
+        return entry;
+      }),
     });
   }
   console.log(`Schedule trips: ${schedule.length}`);

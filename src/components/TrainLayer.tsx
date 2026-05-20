@@ -4,12 +4,13 @@ import { useEffect, useRef } from "react";
 import { useMap } from "@/components/ui/map";
 import type { Line, Stop, Trip } from "@/lib/gtfs-types";
 import {
-  santiagoNow,
+  cityNow,
   activeServiceIds,
   interpolatePosition,
   detectArrival,
 } from "@/lib/interpolator";
 import { playNote } from "@/lib/audio";
+import { CITIES, type CityId } from "@/lib/cities";
 import type MapLibreGL from "maplibre-gl";
 
 interface Props {
@@ -17,6 +18,7 @@ interface Props {
   stops: Stop[];
   schedule: Trip[];
   reducedMotion: boolean;
+  city: CityId;
   onArrival: (lineId: string, stopName: string) => void;
 }
 
@@ -42,6 +44,7 @@ export default function TrainLayer({
   stops,
   schedule,
   reducedMotion,
+  city,
   onArrival,
 }: Props) {
   const { map, isLoaded } = useMap();
@@ -50,10 +53,14 @@ export default function TrainLayer({
   const recentArrivalsRef = useRef<Map<string, number>>(new Map());
   const rafRef = useRef<number>(0);
   const lineColorMap = useRef<Map<string, string>>(new Map());
+  const lineShapes = useRef<Map<string, [number, number][]>>(new Map());
 
-  // Build line→color lookup
+  // Build line→color and line→shape lookups
   useEffect(() => {
-    lines.forEach((l) => lineColorMap.current.set(l.id, l.color));
+    lines.forEach((l) => {
+      lineColorMap.current.set(l.id, l.color);
+      lineShapes.current.set(l.id, l.shape);
+    });
   }, [lines]);
 
   // Initialize MapLibre layers
@@ -124,16 +131,18 @@ export default function TrainLayer({
       const pingsSource = map.getSource(PINGS_SOURCE) as MapLibreGL.GeoJSONSource | undefined;
       if (!trainsSource || !pingsSource) return;
 
-      const { seconds, dow } = santiagoNow();
-      const validServices = activeServiceIds(dow);
+      const cityConfig = CITIES[city];
+      const { seconds, dow } = cityNow(cityConfig.timezone);
+      const validServices = activeServiceIds(dow, cityConfig.serviceByDow);
       const now = performance.now();
 
       const trainFeatures: GeoJSON.Feature[] = [];
+      const bounds = map.getBounds();
 
       for (const trip of schedule) {
         if (!validServices.has(trip.serviceId)) continue;
 
-        const pos = interpolatePosition(trip, seconds);
+        const pos = interpolatePosition(trip, seconds, lineShapes.current);
         if (!pos) continue;
 
         const color = lineColorMap.current.get(trip.lineId) ?? "#ffffff";
@@ -150,16 +159,20 @@ export default function TrainLayer({
           const last = recentArrivalsRef.current.get(key) ?? 0;
           if (now - last > 10000) {
             recentArrivalsRef.current.set(key, now);
-            playNote(trip.lineId);
-            onArrival(trip.lineId, arrived.name);
 
-            if (!reducedMotion) {
-              pingsRef.current.push({
-                id: `${key}:${now}`,
-                coords: pos,
-                color,
-                startedAt: now,
-              });
+            // Only play audio and show pings for trains visible in the viewport
+            if (bounds.contains(pos as [number, number])) {
+              playNote(trip.lineId);
+              onArrival(trip.lineId, arrived.name);
+
+              if (!reducedMotion) {
+                pingsRef.current.push({
+                  id: `${key}:${now}`,
+                  coords: pos,
+                  color,
+                  startedAt: now,
+                });
+              }
             }
           }
         }
@@ -190,7 +203,7 @@ export default function TrainLayer({
 
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [isLoaded, map, schedule, stops, reducedMotion, onArrival]);
+  }, [isLoaded, map, schedule, stops, reducedMotion, city, onArrival]);
 
   return null;
 }

@@ -58,10 +58,22 @@ function routeToLineId(routeId) {
   return routeId;
 }
 
+function nearestShapeIdx(coords, shape) {
+  let bestIdx = 0, bestDist = Infinity;
+  for (let i = 0; i < shape.length; i++) {
+    const dx = coords[0] - shape[i][0], dy = coords[1] - shape[i][1];
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestDist) { bestDist = d2; bestIdx = i; }
+  }
+  return bestIdx;
+}
+
 function toSec(hhmmss) {
   const [h, m, s] = hhmmss.split(":").map(Number);
   return h * 3600 + m * 60 + (s || 0);
 }
+
+const r5 = (v) => Math.round(v * 1e5) / 1e5;
 
 function readZip(zip, name) {
   return zip.getEntry(name)?.getData() ?? null;
@@ -99,37 +111,88 @@ async function main() {
   const metroTripsRaw  = await parseCsv(readZip(metroZip, "trips.txt"));
   const metroTripRoute = Object.fromEntries(metroTripsRaw.map((t) => [t.trip_id, t.route_id]));
 
-  // One canonical shape per route: prefer direction_id=0
-  const canonicalShapeId = {};
+  // Collect all distinct shape_ids per route (direction=0 trips; fallback to any direction)
+  const routeShapeIds = {};
   for (const t of metroTripsRaw) {
-    if (!canonicalShapeId[t.route_id] || t.direction_id === "0") {
-      canonicalShapeId[t.route_id] = t.shape_id;
-    }
+    if (t.direction_id !== "0") continue;
+    if (!routeShapeIds[t.route_id]) routeShapeIds[t.route_id] = new Set();
+    routeShapeIds[t.route_id].add(t.shape_id);
+  }
+  for (const t of metroTripsRaw) {
+    if (!routeShapeIds[t.route_id]) routeShapeIds[t.route_id] = new Set([t.shape_id]);
   }
 
-  const shapePoints = {};
+  // Load all needed shapes
+  const allNeededShapes = new Set(Object.values(routeShapeIds).flatMap((s) => [...s]));
   const shapesRaw = await parseCsv(readZip(metroZip, "shapes.txt"));
-  const canonicalSet = new Set(Object.values(canonicalShapeId));
+  const shapeData = {};
   for (const pt of shapesRaw) {
-    if (!canonicalSet.has(pt.shape_id)) continue;
-    if (!shapePoints[pt.shape_id]) shapePoints[pt.shape_id] = [];
-    shapePoints[pt.shape_id].push({
+    if (!allNeededShapes.has(pt.shape_id)) continue;
+    if (!shapeData[pt.shape_id]) shapeData[pt.shape_id] = [];
+    shapeData[pt.shape_id].push({
       seq: parseInt(pt.shape_pt_sequence),
-      coords: [parseFloat(pt.shape_pt_lon), parseFloat(pt.shape_pt_lat)],
+      coords: [r5(parseFloat(pt.shape_pt_lon)), r5(parseFloat(pt.shape_pt_lat))],
     });
   }
-  for (const id of Object.keys(shapePoints)) {
-    shapePoints[id].sort((a, b) => a.seq - b.seq);
+  for (const id of Object.keys(shapeData)) {
+    shapeData[id].sort((a, b) => a.seq - b.seq);
+    shapeData[id] = shapeData[id].map((p) => p.coords);
+  }
+
+  // Chain multiple shape segments into one polyline per route (handles M9/M7/M10 branches).
+  // Identifies "free" (non-shared) endpoints first to find true termini, then greedily appends.
+  function dist2([x1, y1], [x2, y2]) { return (x1 - x2) ** 2 + (y1 - y2) ** 2; }
+
+  function chainSegments(segs) {
+    if (segs.length <= 1) return segs[0] ?? [];
+
+    // Build endpoint list: {si, isFirst, coord}
+    const eps = segs.flatMap((s, si) => [
+      { si, isFirst: true,  coord: s[0] },
+      { si, isFirst: false, coord: s[s.length - 1] },
+    ]);
+
+    // An endpoint is "free" (terminus) if no other segment has a nearby endpoint
+    const SHARED = 1e-4; // ~100m in degree² — endpoints closer than this are a shared junction
+    const isFree = (ep) => eps.every((o) => o.si === ep.si || dist2(ep.coord, o.coord) >= SHARED);
+    const freeEps = eps.filter(isFree);
+
+    // Orient the starting segment so its free endpoint comes first
+    const fe = freeEps[0] ?? { si: 0, isFirst: true };
+    const startReverse = !fe.isFirst;
+    const result = startReverse ? [...segs[fe.si]].reverse() : [...segs[fe.si]];
+    const remaining = segs.map((s, i) => s).filter((_, i) => i !== fe.si);
+
+    while (remaining.length > 0) {
+      const tail = result[result.length - 1];
+      let bi = 0, bd = Infinity, brev = false;
+      for (let i = 0; i < remaining.length; i++) {
+        const d0 = dist2(tail, remaining[i][0]);
+        const d1 = dist2(tail, remaining[i][remaining[i].length - 1]);
+        if (d0 < bd) { bd = d0; bi = i; brev = false; }
+        if (d1 < bd) { bd = d1; bi = i; brev = true; }
+      }
+      if (bd > 0.01) break; // >~1km gap — stop rather than draw a long straight line
+      const seg = remaining.splice(bi, 1)[0];
+      result.push(...(brev ? [...seg].reverse() : seg));
+    }
+    return result;
+  }
+
+  // Build per-route chained shape (used for both rendering and shapeIdx computation)
+  const routeShape = {};
+  for (const [routeId, shapeIds] of Object.entries(routeShapeIds)) {
+    const segs = [...shapeIds].map((id) => shapeData[id]).filter(Boolean);
+    routeShape[routeId] = segs.length > 0 ? chainSegments(segs) : [];
   }
 
   // ── lines.json ─────────────────────────────────────────────────────────────
   const metroLines = metroRoutes
-    .filter((r) => canonicalShapeId[r.route_id]) // skip lines with no trips/shape (e.g. M3 suspended)
+    .filter((r) => routeShape[r.route_id]?.length > 0) // skip lines with no shape (e.g. M3 suspended)
     .map((r) => {
       const lineId = routeToLineId(r.route_id);
       const meta = METRO_META[lineId] ?? { color: `#${r.route_color}`, note: "C4", oscillatorType: "sine" };
-      const shapeId = canonicalShapeId[r.route_id];
-      const shape = (shapePoints[shapeId] ?? []).map((p) => p.coords);
+      const shape = routeShape[r.route_id];
       return { id: lineId, name: r.route_long_name, color: meta.color, note: meta.note, oscillatorType: meta.oscillatorType, shape };
     });
 
@@ -141,6 +204,7 @@ async function main() {
   });
 
   const lines = [...metroLines, ...cercaniasLines];
+  const lineShapeMap = new Map(metroLines.map((l) => [l.id, l.shape]));
 
   // ── stops.json ─────────────────────────────────────────────────────────────
   // Metro: par_ stops referenced in stop_times → derive lineId from trips
@@ -161,7 +225,7 @@ async function main() {
       id: s.stop_id,
       name: s.stop_name,
       lineId: stopToLine[s.stop_id],
-      coords: [parseFloat(s.stop_lon), parseFloat(s.stop_lat)],
+      coords: [r5(parseFloat(s.stop_lon)), r5(parseFloat(s.stop_lat))],
     }));
 
   // Cercanías: par_ stops (stops only, no schedule)
@@ -175,7 +239,7 @@ async function main() {
     id: s.stop_id,
     name: s.stop_name,
     lineId: "C",
-    coords: [parseFloat(s.stop_lon), parseFloat(s.stop_lat)],
+    coords: [r5(parseFloat(s.stop_lon)), r5(parseFloat(s.stop_lat))],
   }));
 
   const stops = [...metroStops, ...cercaniasStops];
@@ -187,20 +251,32 @@ async function main() {
   // Build stop_id → coords lookup
   const stopCoords = new Map(metroParStops.map((s) => [
     s.stop_id,
-    [parseFloat(s.stop_lon), parseFloat(s.stop_lat)],
+    [r5(parseFloat(s.stop_lon)), r5(parseFloat(s.stop_lat))],
   ]));
+
+  // Pre-compute shapeIdx per stop_id (nearest point in line's canonical shape)
+  const stopShapeIdxCache = new Map();
+  for (const st of metroStopTimesRaw) {
+    if (stopShapeIdxCache.has(st.stop_id)) continue;
+    const coords = stopCoords.get(st.stop_id);
+    if (!coords) continue;
+    const lineId = routeToLineId(metroTripRoute[st.trip_id]);
+    const shape = lineShapeMap.get(lineId) ?? [];
+    if (shape.length > 0) stopShapeIdxCache.set(st.stop_id, nearestShapeIdx(coords, shape));
+  }
 
   // Group stop_times by trip_id (already loaded above)
   const templateStopTimes = new Map();
   for (const st of metroStopTimesRaw) {
     if (!templateStopTimes.has(st.trip_id)) templateStopTimes.set(st.trip_id, []);
-    templateStopTimes.get(st.trip_id).push({
-      stopId: st.stop_id,
+    const entry = {
       arrival: toSec(st.arrival_time),
       departure: toSec(st.departure_time),
       seq: parseInt(st.stop_sequence),
       coords: stopCoords.get(st.stop_id),
-    });
+    };
+    if (stopShapeIdxCache.has(st.stop_id)) entry.shapeIdx = stopShapeIdxCache.get(st.stop_id);
+    templateStopTimes.get(st.trip_id).push(entry);
   }
   for (const times of templateStopTimes.values()) {
     times.sort((a, b) => a.seq - b.seq);
@@ -209,7 +285,7 @@ async function main() {
   // Load trips metadata
   const metroTripSvc = Object.fromEntries(metroTripsRaw.map((t) => [t.trip_id, t.service_id]));
 
-  // Expand frequencies
+  // Build compact schedule: templates + index (no expanded trips stored)
   const freqsRaw = await parseCsv(readZip(metroZip, "frequencies.txt"));
   const freqsByTrip = new Map();
   for (const f of freqsRaw) {
@@ -217,8 +293,8 @@ async function main() {
     freqsByTrip.get(f.trip_id).push(f);
   }
 
-  const schedule = [];
-  let expandedCount = 0;
+  const templates = [];
+  const index = []; // [templateIdx, tripStart] pairs
 
   for (const [templateTripId, template] of templateStopTimes) {
     const freqs = freqsByTrip.get(templateTripId);
@@ -228,36 +304,36 @@ async function main() {
     const serviceId = metroTripSvc[templateTripId];
     const refFirstStop = template[0].arrival;
 
+    // Normalize times so first stop = 0; filter stops with missing coords
+    const normalizedStops = template
+      .filter((st) => st.coords)
+      .map((st) => {
+        const entry = {
+          arrival: st.arrival - refFirstStop,
+          departure: st.departure - refFirstStop,
+          coords: st.coords,
+        };
+        if (st.shapeIdx !== undefined) entry.shapeIdx = st.shapeIdx;
+        return entry;
+      });
+
+    if (normalizedStops.length < 2) continue;
+
+    const tmplIdx = templates.length;
+    templates.push({ id: templateTripId, lineId, serviceId, stopTimes: normalizedStops });
+
     for (const freq of freqs) {
       const windowStart = toSec(freq.start_time);
       const windowEnd   = toSec(freq.end_time);
       const headway     = parseInt(freq.headway_secs);
-
       for (let tripStart = windowStart; tripStart < windowEnd; tripStart += headway) {
-        const offset = tripStart - refFirstStop;
-        const stopTimes = template
-          .filter((st) => st.coords)
-          .map((st) => ({
-            stopId:    st.stopId,
-            arrival:   st.arrival + offset,
-            departure: st.departure + offset,
-            coords:    st.coords,
-          }));
-
-        if (stopTimes.length < 2) continue;
-
-        schedule.push({
-          tripId:    `${templateTripId}_${tripStart}`,
-          lineId,
-          serviceId,
-          stopTimes,
-        });
-        expandedCount++;
+        index.push([tmplIdx, tripStart]);
       }
     }
   }
 
-  console.log(`Expanded trips: ${expandedCount}`);
+  const schedule = { templates, index };
+  console.log(`Templates: ${templates.length} | Expanded trips: ${index.length}`);
 
   // ── Write output ───────────────────────────────────────────────────────────
   mkdirSync(OUT_DIR, { recursive: true });
@@ -267,7 +343,7 @@ async function main() {
 
   console.log(`✓ lines.json    (${lines.length} lines: ${metroLines.length} Metro + ${cercaniasLines.length} Cercanías)`);
   console.log(`✓ stops.json    (${stops.length} stops)`);
-  console.log(`✓ schedule.json (${schedule.length} trips, ~${(JSON.stringify(schedule).length / 1e6).toFixed(1)} MB)`);
+  console.log(`✓ schedule.json (${templates.length} templates, ${index.length} trips, ~${(JSON.stringify(schedule).length / 1e6).toFixed(1)} MB)`);
   console.log("\nNote: Cercanías schedule data absent from this GTFS feed — stops shown on map only.");
   console.log("Note: Line 3 (M3) absent from this GTFS feed — likely suspended/under renovation.");
 }
