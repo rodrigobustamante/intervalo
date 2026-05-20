@@ -1,41 +1,52 @@
-"use client";
-
-import { I18nProvider, useI18n } from "@/lib/i18n";
+import type { Metadata, Viewport } from "next";
+import ClientLayout from "./ClientLayout";
 import "./globals.css";
 
-function ControlBar() {
-  const { locale, toggleLocale, theme, toggleTheme } = useI18n();
-  const cls = theme === "dark"
-    ? "text-white/50 border-white/20 hover:text-white hover:border-white/50"
-    : "text-black/50 border-black/20 hover:text-black hover:border-black/50";
-  return (
-    <div className="fixed top-4 right-4 z-50 flex gap-2">
-      <button
-        onClick={toggleTheme}
-        className={`text-xs font-mono focus-visible:ring-2 outline-none px-2 py-1 border transition-colors ${cls}`}
-        aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-      >
-        {theme === "dark" ? "◑" : "◐"}
-      </button>
-      <button
-        onClick={toggleLocale}
-        className={`text-xs font-mono focus-visible:ring-2 outline-none px-2 py-1 border transition-colors ${cls}`}
-        aria-label={locale === "es" ? "Switch to English" : "Cambiar a español"}
-      >
-        {locale === "es" ? "EN" : "ES"}
-      </button>
-    </div>
-  );
-}
+export const metadata: Metadata = {
+  metadataBase: new URL("https://intervalo.rodrigobustamante.cl"),
+  title: {
+    default: "Intervalo",
+    template: "%s — Intervalo",
+  },
+  description:
+    "El metro como instrumento. Visualización sonora en tiempo real del Metro de Santiago y Madrid.",
+  keywords: ["metro", "Santiago", "Madrid", "música", "visualización", "GTFS", "transporte"],
+  authors: [{ name: "Rodrigo Bustamante" }],
+  robots: { index: true, follow: true },
+  openGraph: {
+    title: "Intervalo",
+    description: "El metro como instrumento.",
+    url: "https://intervalo.rodrigobustamante.cl",
+    siteName: "Intervalo",
+    locale: "es_CL",
+    type: "website",
+  },
+  twitter: {
+    card: "summary",
+    title: "Intervalo",
+    description: "El metro como instrumento.",
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+    { media: "(prefers-color-scheme: light)", color: "#f5f0e8" },
+  ],
+};
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="es">
+      <head>
+        <link rel="preconnect" href="https://basemaps.cartocdn.com" />
+        <link rel="dns-prefetch" href="https://basemaps.cartocdn.com" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+      </head>
       <body>
-        <I18nProvider>
-          {children}
-          <ControlBar />
-        </I18nProvider>
+        <ClientLayout>{children}</ClientLayout>
       </body>
     </html>
   );
