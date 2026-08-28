@@ -4,6 +4,7 @@
   "activeTrains": "{count} active trains",
   "notePerMin": "{count} notes/min",
   "languageToggle": "Cambiar a español",
+  "changeCity": "change city",
   "cities": {
     "santiago": "Santiago",
     "madrid": "Madrid"

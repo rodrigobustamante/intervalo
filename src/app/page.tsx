@@ -17,7 +17,7 @@ export default function Home() {
     setCity(selectedCity);
   };
 
-  if (city) return <MetroMap city={city} />;
+  if (city) return <MetroMap city={city} onChangeCity={() => setCity(null)} />;
 
   const isDark = theme === "dark";
   const bg = isDark ? "bg-[#0a0a0a]" : "bg-[#f5f0e8]";

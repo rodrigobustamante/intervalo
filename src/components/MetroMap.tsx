@@ -176,7 +176,7 @@ function Colophon({ open, onClose, theme, city }: { open: boolean; onClose: () =
 
 // ── MetroMap ────────────────────────────────────────────────────────────────
 
-export default function MetroMap({ city }: { city: CityId }) {
+export default function MetroMap({ city, onChangeCity }: { city: CityId; onChangeCity: () => void }) {
   const cityConfig = CITIES[city];
 
   const [lines, setLines] = useState<Line[]>([]);
@@ -279,6 +279,14 @@ export default function MetroMap({ city }: { city: CityId }) {
         theme={theme}
         city={city}
       />
+
+      <button
+        onClick={onChangeCity}
+        className={`absolute bottom-6 left-6 text-xs font-mono outline-none focus-visible:ring-2 ${muted}`}
+        aria-label={t("changeCity")}
+      >
+        <span aria-hidden="true">←</span> {t("changeCity")}
+      </button>
 
       <button
         onClick={() => setColophonOpen((o) => !o)}
