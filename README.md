@@ -1,5 +1,10 @@
 # Intervalo
 
+[![ci](https://github.com/rodrigobustamante/intervalo/actions/workflows/ci.yml/badge.svg)](https://github.com/rodrigobustamante/intervalo/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-0891b2.svg)](LICENSE)
+
+<a href="https://intervalo.rodrigobustamante.cl"><img src="docs/preview.gif" alt="Trains moving across the Madrid metro map in Intervalo" width="100%" /></a>
+
 **[intervalo.rodrigobustamante.cl](https://intervalo.rodrigobustamante.cl)**
 
 Interpolated real-time sound visualization of urban transit networks. Each train triggers a musical note as it approaches a station — 7 lines, 7 simultaneous voices.
@@ -122,3 +127,9 @@ Maximum 4 simultaneous notes to prevent saturation.
 - Concept inspired by [El Organillero](https://organillero.heliouz.com/) by Helios Ocaña (Mexico City) and [TrainJazz](https://www.trainjazz.com/) by Joshua Wolk
 - Transit data: Metro de Santiago / DTPM, CRTM, Renfe
 - Map: [mapcn](https://mapcn.dev) + MapLibre GL + CARTO
+
+---
+
+## License
+
+Code under [MIT](LICENSE) © Rodrigo Bustamante. Transit data belongs to its providers (DTPM, CRTM, Renfe) and is subject to their own terms.
