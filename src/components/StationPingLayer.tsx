@@ -6,7 +6,8 @@
 import { useEffect } from "react";
 import { useMap } from "@/components/ui/map";
 import type { Stop } from "@/lib/gtfs-types";
-import type MapLibreGL from "maplibre-gl";
+import type * as MapLibreGL from "maplibre-gl";
+import type * as GeoJSON from "geojson";
 
 interface Props {
   stops: Stop[];

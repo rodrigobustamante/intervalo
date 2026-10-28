@@ -36,3 +36,6 @@ next-env.d.ts
 # gtfs source (large, do not commit)
 scripts/gtfs/*.zip
 
+
+# maplibre worker (copied from node_modules by copy-maplibre-worker)
+/public/maplibre-gl-worker.mjs

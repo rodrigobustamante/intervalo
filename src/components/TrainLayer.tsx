@@ -11,7 +11,8 @@ import {
 } from "@/lib/interpolator";
 import { playNote } from "@/lib/audio";
 import { CITIES, type CityId } from "@/lib/cities";
-import type MapLibreGL from "maplibre-gl";
+import type * as MapLibreGL from "maplibre-gl";
+import type * as GeoJSON from "geojson";
 
 interface Props {
   lines: Line[];

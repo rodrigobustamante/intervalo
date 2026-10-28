@@ -25,7 +25,7 @@ When running `process-gtfs.mjs` with a new ZIP:
 
 ## Stack
 
-- **Next.js 14** (App Router, `src/` directory)
+- **Next.js 16** (App Router, `src/` directory)
 - **TypeScript** strict mode
 - **Tailwind CSS** + **shadcn/ui**
 - **mapcn** ([mapcn.dev](https://mapcn.dev)) — MapLibre GL JS wrapper
